@@ -153,9 +153,9 @@ class Station(object):
 	Defines Station of the Airfoil
 	Input - Parameters read from blade schedule file.
 	"""
-	def __init__(self,nel,RNodes,AeroTwist,Chord,FoilName):
+	def __init__(self,nnx,nny,RNodes,AeroTwist,Chord,FoilName):
 		super(Station, self).__init__()
-		self.nel = nel
+		self.nnx, self.nny = nnx, nny
 		self.RNodes = float(RNodes)
 		self.AeroTwist = float(AeroTwist)
 		self.Chord = float(Chord)
@@ -178,13 +178,12 @@ class Station(object):
 		# self.Bottom.plot()
 		# self.Right.plot()
 		# self.Left.plot()
-		self.MeshX, self.MeshY = self.TFI(self.nel[0],self.nel[1],self.Bottom,self.Top,self.Left,self.Right)
+		self.MeshX, self.MeshY = self.TFI(self.nnx, self.nny,self.Bottom,self.Top,self.Left,self.Right)
 		# PlotGrid(self.MeshX, self.MeshY)
 
 	def TFI(self,n,m,BottomRep,TopRep,Left,Right):
 		#Performs transfinite interpolation given the four representations of blade.
-		#Returns X,Y coordinates of the grid.
-	
+		#Returns X,Y coordinates of the grid. 
 		X = np.zeros([n,m])
 		Y = np.zeros([n,m])
 		xi = np.linspace(0.,1,n)
@@ -203,10 +202,11 @@ class Station(object):
 
 class Blade(object):
 	"""Defines a blade based on blade data"""
-	def __init__(self,schedule):
+	def __init__(self,schedule,mesh=[24,8,100]):
 		super(Blade, self).__init__()
 		self.schedule = schedule
-		self.nel = [24,8]
+		self.nelx,self.nely,self.nelz = mesh
+		self.nnx,self.nny,self.nnz = self.nelx+1,self.nely+1,self.nelz+1
 		# Read the blade schedule
 		self.stations = []
 		with open (self.schedule, 'rb') as csvfile :
@@ -220,7 +220,7 @@ class Blade(object):
 					Chord = float(row[3])
 					NFoil = row[4]
 					if NFoil != 'Cylinder1' and NFoil != 'Cylinder2':
-						s = Station(self.nel,RNodes, AeroTwist, Chord,NFoil)
+						s = Station(self.nnx,self.nny,RNodes, AeroTwist, Chord,NFoil)
 						self.stations.append(s)
 
 	def Plot3D(self):
@@ -236,41 +236,95 @@ class Blade(object):
 		plt.show()
 
 class Mesh(object):
-	"""docstring for Mesh"""
-	def __init__(self, blade,nelz):
+	"""Creates a lofted mesh of the wind turbine blade
+	Node Numberng
+	
+	3-----6-----9-----12
+	| (2) | (4) | (6)  |
+	2-----5-----8-----11	 
+ 	| (1) | (3) | (5)  |
+	1-----4-----7-----10
+
+
+	"""
+	def __init__(self,blade,WriteAbaqus=0):
 		super(Mesh, self).__init__()
 		self.blade = blade
-		self.nelz = nelz
+		self.nelx,self.nely, self.nelz = self.blade.nelx,self.blade.nely,self.blade.nelz
+		self.nnx,self.nny, self.nnz = self.blade.nnx,self.blade.nny,self.blade.nnz
+		self.nodesPerSection = self.nelz/len(self.blade.stations)
+		self.numSections = len(self.blade.stations)-1
+		# print "nodes per section", self.nodesPerSection
+		#CORRECTED NUMBER OF NODES IN Z
+		self.nnz = (self.nodesPerSection)+(self.numSections-1)*(self.nodesPerSection-1)
+		# self.nnz = 4
+		print self.nnz
+		if WriteAbaqus:
+			f = open('blade.inp','w+')
+			f.write('*Heading\n')
+			f.write('** Job name: blade Model name: blade\n')	
+			f.write('**\n')
+			f.write('** PARTS\n')
+			f.write('**\n')		
+			f.write('*Part, name=Blade\n')
+			f.write('*Node\n')
+			f.close()
+
+
 		plt.figure()
 		ax = plt.gca(projection='3d')
 		SecHeight = 0
 		CurrentH = 0
+		nodenum = 0
 		for st in range(0,len(self.blade.stations)-1):
 		# 	plt.plot(self.stations[i].Airfoil.X,self.stations[i].Airfoil.Y)
-			tau = np.linspace(0.,1,self.nelz)
-			# print tau
+			#To do, fix the number of elements in Z
+			tau = np.linspace(0.,1,self.nodesPerSection)
+
 			SecHeight = self.blade.stations[st+1].RNodes - self.blade.stations[st].RNodes
-			print "CurrHeight:", CurrentH
+			# print "CurrentHeight:", CurrentH
 			for i in tau:
 				X = (1-i)*self.blade.stations[st].MeshX + i*self.blade.stations[st+1].MeshX
 				Y = (1-i)*self.blade.stations[st].MeshY + i*self.blade.stations[st+1].MeshY
-				
 				if i ==0 and st == 0:
-					ax.scatter(X,Y,i*SecHeight + CurrentH,color= 'blue')
-					print "ZLev:", i*SecHeight + CurrentH
+					ax.scatter(X,Y,i*SecHeight + CurrentH,color = 'blue')
+					if WriteAbaqus:
+						for xi in range(0,X.shape[0]):
+							for eta in range(0,X.shape[1]):
+								nodenum += 1
+								f = open('blade.inp','a+')
+								f.write('%i,%12.7f,%12.7f,%12.7f\n' %(nodenum,X[xi,eta],Y[xi,eta],i*SecHeight + CurrentH))
+								f.close()
 				if i != 0:
-					ax.scatter(X,Y,i*SecHeight + CurrentH,color= 'blue')
-					print "ZLev:", i*SecHeight + CurrentH
+					ax.scatter(X,Y,i*SecHeight + CurrentH, color='blue')
+					if WriteAbaqus:
+						for xi in range(0,X.shape[0]):
+							for eta in range(0,X.shape[1]):
+								nodenum += 1
+								f = open('blade.inp','a+')
+								f.write('%i,%12.7f,%12.7f,%12.7f\n' %(nodenum,X[xi,eta],Y[xi,eta],i*SecHeight + CurrentH))
+								f.close()
 
 			CurrentH += self.blade.stations[st+1].RNodes - self.blade.stations[st].RNodes
-			# raw_input("What is your name? ")
+
+			
 		plt.show()
 
-		
+		if WriteAbaqus:
+			f = open('blade.inp','a+')
+			f.write('*ELEMENT, TYPE=C3D8, ELSET=ALL\n')
+			f.close()
+			elNum = 0
+			
+			for k in range(0,self.nnx*self.nny*(self.nnz-1),self.nnx*self.nny):
+				for i in range(0,(self.nnx-1)*self.nny,self.nny):
+					for j in range(1,self.nely+1):
+						elNum +=1 
+						f = open('blade.inp','a+')
+						f.write('%d, %d,%d,%d,%d,%d,%d,%d,%d\n' %(elNum,0+i+j+k,self.nny+i+j+k,self.nny+1+i+j+k,1+i+j+k,(self.nnx*self.nny)+i+j+k,(self.nnx*self.nny+self.nny)+i+j+k,(self.nnx*self.nny+self.nny+1)+i+j+k,(self.nnx*self.nny+1)+i+j+k))
+						f.close()
 
 if __name__ == '__main__':
-
-	import numpy as np
 
 	# NACA64618 = Airfoil("BladeData/DU30_A17.txt")
 	# # NACA64618.plot()
@@ -285,8 +339,8 @@ if __name__ == '__main__':
 	# Right.plot()
 
 	# # Blade Tests
-	Blade = Blade("BladeData/BladeSchedule.txt")
-	Mesh = Mesh(Blade,8)
+	Blade = Blade("BladeData/BladeSchedule.txt",mesh=[48,16,280])
+	Mesh = Mesh(Blade,WriteAbaqus=1)
 	# Blade.Plot2D()
 
 
